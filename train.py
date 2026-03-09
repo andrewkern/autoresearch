@@ -90,7 +90,7 @@ class MaskedColumnModel(nn.Module):
         self.config = config
 
         # Column embedding: binary vector + frequency -> d_model
-        self.col_embed = nn.Linear(config.n_samples + 1, config.d_model, bias=False)
+        self.col_embed = nn.Linear(config.n_samples, config.d_model, bias=False)
         # Learned mask token
         self.mask_token = nn.Parameter(torch.randn(config.d_model))
         # Learned positional embeddings
@@ -183,13 +183,9 @@ class MaskedColumnModel(nn.Module):
         """
         B, S, L = hap_matrix.shape
 
-        # Compute column features: allele values + allele frequency
+        # Embed columns directly from allele values
         cols = hap_matrix.transpose(1, 2)  # (B, L, S)
-        freq = cols.mean(dim=-1, keepdim=True)  # (B, L, 1)
-        col_features = torch.cat([cols, freq], dim=-1)  # (B, L, S+1)
-
-        # Embed columns
-        x = self.col_embed(col_features)  # (B, L, d_model)
+        x = self.col_embed(cols)  # (B, L, d_model)
 
         # Replace masked positions with mask token
         mask_emb = self.mask_token.view(1, 1, -1).expand(B, L, -1)
