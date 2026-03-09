@@ -334,7 +334,7 @@ class MuonAdamW(torch.optim.Optimizer):
 # Model architecture
 D_MODEL = 512
 N_HEADS = 16
-D_FF_MULT = 4
+D_FF_MULT = 3
 
 # Optimization
 TOTAL_BATCH_SIZE = 256   # examples per optimizer step
