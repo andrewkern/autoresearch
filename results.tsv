@@ -31,3 +31,4 @@ f8c06ab	0.684399	4.5	discard	remove pos_embed param entirely (changed init order
 6b81a40	0.684393	4.5	discard	40% train mask ratio (50% still better)
 8b80898	0.684426	4.9	discard	d_model=384 depth=12 (deeper narrower less expressive)
 d8137d5	0.684312	4.5	discard	train loss on all columns (dilutes useful gradient)
+d2e66e7	0.684300	4.5	discard	Muon weight decay=0 (regularization helps)
