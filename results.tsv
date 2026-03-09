@@ -39,3 +39,4 @@ d2e66e7	0.684300	4.5	discard	Muon weight decay=0 (regularization helps)
 d5d3ec3	0.685059	4.5	discard	two-layer output head (too many params)
 3a76e0d	0.684439	4.5	discard	Muon ns_steps=3 (worse orthogonalization)
 8968927	0.684234	4.5	discard	variable mask ratio U[0.15 0.85] per example
+3fc78c5	0.684249	4.5	discard	weight decay 0.4 (too much regularization)
