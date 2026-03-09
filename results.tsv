@@ -1,2 +1,6 @@
 commit	val_bpa	memory_gb	status	description
 81f7dcf	0.684640	4.2	keep	baseline
+9f7e322	0.685112	6.4	discard	d_model=768 n_heads=12 (larger model)
+83a1fda	0.685094	6.2	discard	depth=12 (deeper model)
+dbee059	0.684828	3.0	discard	d_model=256 depth=6 batch=128 (smaller faster)
+5a53f05	0.685101	4.2	discard	3x higher LRs with 10% warmup

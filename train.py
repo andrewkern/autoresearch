@@ -444,7 +444,8 @@ while True:
     for micro_step in range(grad_accum_steps):
         # Create random mask for this micro-batch
         B = hap_matrix.shape[0]
-        mask = torch.rand(B, N_SITES, device=device) < MASK_RATIO
+        TRAIN_MASK_RATIO = 0.30
+        mask = torch.rand(B, N_SITES, device=device) < TRAIN_MASK_RATIO
 
         # Forward pass (no autocast — fp32 for V100 stability)
         logits = model(hap_matrix, mask)
