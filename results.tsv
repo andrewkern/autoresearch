@@ -41,3 +41,4 @@ d5d3ec3	0.685059	4.5	discard	two-layer output head (too many params)
 8968927	0.684234	4.5	discard	variable mask ratio U[0.15 0.85] per example
 3fc78c5	0.684249	4.5	discard	weight decay 0.4 (too much regularization)
 6803756	0.684238	4.5	discard	5% LR warmup (no warmup better)
+4c706e8	0.685022	4.5	discard	contiguous block masking (mismatches eval random masking)
