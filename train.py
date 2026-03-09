@@ -90,7 +90,7 @@ class MaskedColumnModel(nn.Module):
         self.config = config
 
         # Column embedding: binary vector + frequency -> d_model
-        self.col_embed = nn.Linear(config.n_samples, config.d_model, bias=False)
+        self.col_embed = nn.Linear(config.n_samples, config.d_model, bias=True)
         # Learned mask token
         self.mask_token = nn.Parameter(torch.randn(config.d_model))
         # Learned positional embeddings
@@ -101,7 +101,7 @@ class MaskedColumnModel(nn.Module):
         # Transformer blocks
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
         # Output head: predict allele values for each sample
-        self.output_head = nn.Linear(config.d_model, config.n_samples, bias=False)
+        self.output_head = nn.Linear(config.d_model, config.n_samples, bias=True)
 
     @torch.no_grad()
     def init_weights(self):
