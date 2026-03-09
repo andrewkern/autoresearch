@@ -13,3 +13,7 @@ d07125c	0.684425	4.1	keep	remove frequency feature from col embedding (simpler)
 637d090	0.684607	4.2	discard	total_batch_size=512 (fewer steps)
 4d768d1	0.684580	4.2	discard	total_batch_size=128 (noisier Muon)
 fc8d4fe	0.684284	4.0	keep	remove per-layer residual scaling (simpler + better)
+458dcc7	0.684661	2.9	discard	d_ff_mult=2 (too little MLP capacity)
+1700b86	0.684436	4.0	discard	GeLU activation (ReLU-squared better)
+e9a32c1	0.684993	4.0	discard	70% train mask ratio (too aggressive)
+2e4dd63	0.684240	4.5	keep	QK RMS normalization in attention
