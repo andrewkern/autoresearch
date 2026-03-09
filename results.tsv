@@ -27,3 +27,4 @@ af5ca24	0.684371	4.5	discard	weight-tied col_embed and output head (too constrai
 d7a2a51	0.684807	8.8	discard	device_batch_size=128 (too slow per step fewer total steps)
 d033c12	0.685324	2.4	discard	device_batch_size=32 (too much grad accum overhead)
 7674747	0.684161	4.5	keep	remove positional embeddings (simpler + better)
+f8c06ab	0.684399	4.5	discard	remove pos_embed param entirely (changed init order)
