@@ -181,8 +181,7 @@ class MaskedColumnModel(nn.Module):
         mask_emb = self.mask_token.view(1, 1, -1).expand(B, L, -1)
         x = torch.where(mask.unsqueeze(-1), mask_emb, x)
 
-        # Add positional embeddings
-        x = x + self.pos_embed[:L]
+        # No positional embeddings — columns are permutation-equivariant
 
         # Transformer
         x = norm(x)
