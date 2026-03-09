@@ -25,3 +25,4 @@ a7c284d	0.689270	4.6	discard	label smoothing 0.05 (trains wrong target distribut
 af5ca24	0.684371	4.5	discard	weight-tied col_embed and output head (too constraining)
 9957a67	0.684240	4.5	discard	warmdown_ratio=0.7 (no improvement over 0.5)
 d7a2a51	0.684807	8.8	discard	device_batch_size=128 (too slow per step fewer total steps)
+d033c12	0.685324	2.4	discard	device_batch_size=32 (too much grad accum overhead)
