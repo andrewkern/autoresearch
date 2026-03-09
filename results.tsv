@@ -53,3 +53,4 @@ fc56dc5	0.685902	3.0	discard	fp16 autocast (3.7x more steps but precision loss t
 645664e	0.684193	4.5	discard	Muon LR 0.03 (slightly too low)
 4a1e7c2	0.684288	4.9	discard	d_model=448 depth=10 (still worse than 512x8)
 c44f2d4	0.684229	4.5	discard	Muon beta2=0.999 (too slow adaptation)
+3d422f9	0.684232	4.5	discard	final LR 10% of peak (decaying to zero better)
