@@ -66,3 +66,4 @@ fa923fb	0.684152	4.4	discard	depth=9 with d_ff_mult=3 (extra layer costs too man
 e8ddd3a	0.684110	3.5	discard	depth=7 with d_ff_mult=3 (not enough depth)
 d57499f	0.684253	3.7	discard	d_model=480 (512 is optimal width)
 3a23c7e	0.684196	4.0	discard	remove output head bias (bias helps)
+b338eaa	0.684140	4.0	discard	8 heads with d_ff_mult=3 (16 heads still better)
