@@ -52,6 +52,8 @@ class SelfAttention(nn.Module):
         q = self.c_q(x).view(B, L, self.n_head, self.head_dim).transpose(1, 2)
         k = self.c_k(x).view(B, L, self.n_head, self.head_dim).transpose(1, 2)
         v = self.c_v(x).view(B, L, self.n_head, self.head_dim).transpose(1, 2)
+        q = F.rms_norm(q, (self.head_dim,))
+        k = F.rms_norm(k, (self.head_dim,))
         y = F.scaled_dot_product_attention(q, k, v)  # bidirectional (no causal mask)
         y = y.transpose(1, 2).contiguous().view(B, L, D)
         y = self.c_proj(y)
