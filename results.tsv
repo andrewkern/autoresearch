@@ -115,3 +115,4 @@ ac7e5c9	0.684979	3.4	discard	shared Q/K projection (too constraining despite mor
 d410dab	0.684578	4.0	discard	center allele vector before embed (loses frequency info)
 2012375	0.684094	4.0	discard	output LR 0.005 (0.004 still optimal)
 b4600c0	0.684250	4.0	discard	embedding LR 0.015 (0.01 still optimal)
+44b2508	0.683997	4.0	discard	Adam eps=1e-8 (1e-10 better)
