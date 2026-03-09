@@ -6,3 +6,4 @@ dbee059	0.684828	3.0	discard	d_model=256 depth=6 batch=128 (smaller faster)
 5a53f05	0.685101	4.2	discard	3x higher LRs with 10% warmup
 d915884	0.684625	4.2	keep	30% train mask ratio (eval still 15%)
 d634094	0.684473	4.2	keep	50% train mask ratio
+d07125c	0.684425	4.1	keep	remove frequency feature from col embedding (simpler)
