@@ -114,3 +114,4 @@ ac7e5c9	0.684979	3.4	discard	shared Q/K projection (too constraining despite mor
 1cca6eb	0.740296	4.0	discard	focal loss gamma=1 (changes gradient scale mismatched LRs)
 d410dab	0.684578	4.0	discard	center allele vector before embed (loses frequency info)
 2012375	0.684094	4.0	discard	output LR 0.005 (0.004 still optimal)
+b4600c0	0.684250	4.0	discard	embedding LR 0.015 (0.01 still optimal)
