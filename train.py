@@ -95,9 +95,6 @@ class MaskedColumnModel(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(config.d_model))
         # Learned positional embeddings
         self.pos_embed = nn.Parameter(torch.randn(config.n_sites, config.d_model) * 0.02)
-        # Per-layer residual scaling
-        self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
-        self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
         # Transformer blocks
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
         # Output head: predict allele values for each sample
@@ -122,15 +119,11 @@ class MaskedColumnModel(nn.Module):
             nn.init.zeros_(block.attn.c_proj.weight)
             nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
             nn.init.zeros_(block.mlp.c_proj.weight)
-        # Per-layer scalars
-        self.resid_lambdas.fill_(1.0)
-        self.x0_lambdas.fill_(0.1)
 
     def estimate_flops(self):
         """Estimated FLOPs per example (forward + backward)."""
         nparams = sum(p.numel() for p in self.parameters())
         nparams -= self.pos_embed.numel() + self.mask_token.numel()
-        nparams -= self.resid_lambdas.numel() + self.x0_lambdas.numel()
         L = self.config.n_sites
         h = self.config.n_head
         d = self.config.d_model // self.config.n_head
@@ -146,9 +139,8 @@ class MaskedColumnModel(nn.Module):
         matrix_params = list(self.blocks.parameters())
         embedding_params = [self.col_embed.weight]
         output_params = [self.output_head.weight]
-        small_params = [self.mask_token, self.pos_embed]
-        resid_params = [self.resid_lambdas]
-        x0_params = [self.x0_lambdas]
+        small_params = [self.mask_token, self.pos_embed,
+                        self.col_embed.bias, self.output_head.bias]
 
         param_groups = [
             dict(kind='adamw', params=output_params, lr=output_lr * dmodel_lr_scale,
@@ -157,10 +149,6 @@ class MaskedColumnModel(nn.Module):
                  betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind='adamw', params=small_params, lr=embedding_lr * dmodel_lr_scale,
                  betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01,
-                 betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=x0_params, lr=scalar_lr,
-                 betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
@@ -194,11 +182,9 @@ class MaskedColumnModel(nn.Module):
         # Add positional embeddings
         x = x + self.pos_embed[:L]
 
-        # Transformer with residual scaling
+        # Transformer
         x = norm(x)
-        x0 = x
-        for i, block in enumerate(self.blocks):
-            x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
+        for block in self.blocks:
             x = block(x)
         x = norm(x)
 

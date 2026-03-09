@@ -8,3 +8,7 @@ d915884	0.684625	4.2	keep	30% train mask ratio (eval still 15%)
 d634094	0.684473	4.2	keep	50% train mask ratio
 d07125c	0.684425	4.1	keep	remove frequency feature from col embedding (simpler)
 496e571	0.684386	4.2	keep	add bias to col_embed and output_head
+80a8898	0.684486	4.2	discard	warmdown_ratio=0.3 (less warmdown)
+5a080e6	0.684402	5.4	discard	SwiGLU MLP (more params slower training)
+637d090	0.684607	4.2	discard	total_batch_size=512 (fewer steps)
+4d768d1	0.684580	4.2	discard	total_batch_size=128 (noisier Muon)
