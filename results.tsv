@@ -4,3 +4,4 @@ commit	val_bpa	memory_gb	status	description
 83a1fda	0.685094	6.2	discard	depth=12 (deeper model)
 dbee059	0.684828	3.0	discard	d_model=256 depth=6 batch=128 (smaller faster)
 5a53f05	0.685101	4.2	discard	3x higher LRs with 10% warmup
+d915884	0.684625	4.2	keep	30% train mask ratio (eval still 15%)
