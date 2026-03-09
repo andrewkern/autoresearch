@@ -1,388 +1,194 @@
 """
-One-time data preparation for autoresearch experiments.
-Downloads data shards and trains a BPE tokenizer.
+One-time data preparation for population genetics autoresearch.
+Simulates haplotype matrices using msprime and prepares evaluation.
 
 Usage:
-    python prepare.py                  # full prep (download + tokenizer)
-    python prepare.py --num-shards 8   # download only 8 shards (for testing)
+    python prepare.py                  # generate data (default 20K train, 1K val)
+    python prepare.py --n-train 50000  # custom training set size
 
-Data and tokenizer are stored in ~/.cache/autoresearch/.
+Data is stored in ~/.cache/autoresearch-popgen/.
 """
 
 import os
-import sys
-import time
 import math
+import random
 import argparse
-import pickle
 from multiprocessing import Pool
 
-import requests
-import pyarrow.parquet as pq
-import rustbpe
-import tiktoken
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 # ---------------------------------------------------------------------------
 # Constants (fixed, do not modify)
 # ---------------------------------------------------------------------------
 
-MAX_SEQ_LEN = 2048       # context length
-TIME_BUDGET = 300        # training time budget in seconds (5 minutes)
-EVAL_TOKENS = 40 * 524288  # number of tokens for val eval
+N_SAMPLES = 128       # number of haplotypes per simulation
+N_SITES = 256         # number of segregating sites per window
+TIME_BUDGET = 300     # training time budget in seconds (5 minutes)
+MASK_RATIO = 0.15     # fraction of columns to mask during training/eval
+EVAL_EXAMPLES = 1024  # number of validation examples (must be divisible by batch_size)
+
+# Simulation parameters
+REGION_LENGTH = 200_000  # base pairs per simulation
+MU = 1.25e-8             # mutation rate per bp per generation
+RECOMB_RATE = 1e-8       # recombination rate per bp per generation
+NE = 10_000              # effective population size
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch")
-DATA_DIR = os.path.join(CACHE_DIR, "data")
-TOKENIZER_DIR = os.path.join(CACHE_DIR, "tokenizer")
-BASE_URL = "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
-MAX_SHARD = 6542 # the last datashard is shard_06542.parquet
-VAL_SHARD = MAX_SHARD  # pinned validation shard (shard_06542)
-VAL_FILENAME = f"shard_{VAL_SHARD:05d}.parquet"
-VOCAB_SIZE = 8192
-
-# BPE split pattern (GPT-4 style, with \p{N}{1,2} instead of {1,3})
-SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
-
-SPECIAL_TOKENS = [f"<|reserved_{i}|>" for i in range(4)]
-BOS_TOKEN = "<|reserved_0|>"
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autoresearch-popgen")
+TRAIN_PATH = os.path.join(CACHE_DIR, "train.pt")
+VAL_PATH = os.path.join(CACHE_DIR, "val.pt")
 
 # ---------------------------------------------------------------------------
-# Data download
+# Simulation
 # ---------------------------------------------------------------------------
 
-def download_single_shard(index):
-    """Download one parquet shard with retries. Returns True on success."""
-    filename = f"shard_{index:05d}.parquet"
-    filepath = os.path.join(DATA_DIR, filename)
-    if os.path.exists(filepath):
-        return True
+def simulate_one(seed):
+    """Simulate one haplotype matrix of shape (N_SAMPLES, N_SITES).
+    Returns numpy int8 array or None if not enough segregating sites."""
+    import msprime
 
-    url = f"{BASE_URL}/{filename}"
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = requests.get(url, stream=True, timeout=30)
-            response.raise_for_status()
-            temp_path = filepath + ".tmp"
-            with open(temp_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            os.rename(temp_path, filepath)
-            print(f"  Downloaded {filename}")
-            return True
-        except (requests.RequestException, IOError) as e:
-            print(f"  Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
-            for path in [filepath + ".tmp", filepath]:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            if attempt < max_attempts:
-                time.sleep(2 ** attempt)
-    return False
-
-
-def download_data(num_shards, download_workers=8):
-    """Download training shards + pinned validation shard."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    num_train = min(num_shards, MAX_SHARD)
-    ids = list(range(num_train))
-    if VAL_SHARD not in ids:
-        ids.append(VAL_SHARD)
-
-    # Count what's already downloaded
-    existing = sum(1 for i in ids if os.path.exists(os.path.join(DATA_DIR, f"shard_{i:05d}.parquet")))
-    if existing == len(ids):
-        print(f"Data: all {len(ids)} shards already downloaded at {DATA_DIR}")
-        return
-
-    needed = len(ids) - existing
-    print(f"Data: downloading {needed} shards ({existing} already exist)...")
-
-    workers = max(1, min(download_workers, needed))
-    with Pool(processes=workers) as pool:
-        results = pool.map(download_single_shard, ids)
-
-    ok = sum(1 for r in results if r)
-    print(f"Data: {ok}/{len(ids)} shards ready at {DATA_DIR}")
-
-# ---------------------------------------------------------------------------
-# Tokenizer training
-# ---------------------------------------------------------------------------
-
-def list_parquet_files():
-    """Return sorted list of parquet file paths in the data directory."""
-    files = sorted(f for f in os.listdir(DATA_DIR) if f.endswith(".parquet") and not f.endswith(".tmp"))
-    return [os.path.join(DATA_DIR, f) for f in files]
-
-
-def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
-    """Yield documents from training split (all shards except pinned val shard)."""
-    parquet_paths = [p for p in list_parquet_files() if not p.endswith(VAL_FILENAME)]
-    nchars = 0
-    for filepath in parquet_paths:
-        pf = pq.ParquetFile(filepath)
-        for rg_idx in range(pf.num_row_groups):
-            rg = pf.read_row_group(rg_idx)
-            for text in rg.column("text").to_pylist():
-                doc = text[:doc_cap] if len(text) > doc_cap else text
-                nchars += len(doc)
-                yield doc
-                if nchars >= max_chars:
-                    return
-
-
-def train_tokenizer():
-    """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
-    tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
-    token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
-
-    if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
-        print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
-        return
-
-    os.makedirs(TOKENIZER_DIR, exist_ok=True)
-
-    parquet_files = list_parquet_files()
-    if len(parquet_files) < 2:
-        print("Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first.")
-        sys.exit(1)
-
-    # --- Train with rustbpe ---
-    print("Tokenizer: training BPE tokenizer...")
-    t0 = time.time()
-
-    tokenizer = rustbpe.Tokenizer()
-    vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
-    tokenizer.train_from_iterator(text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN)
-
-    # Build tiktoken encoding from trained merges
-    pattern = tokenizer.get_pattern()
-    mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
-    tokens_offset = len(mergeable_ranks)
-    special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
-    enc = tiktoken.Encoding(
-        name="rustbpe",
-        pat_str=pattern,
-        mergeable_ranks=mergeable_ranks,
-        special_tokens=special_tokens,
+    ts = msprime.sim_ancestry(
+        samples=N_SAMPLES // 2,  # diploid individuals -> N_SAMPLES haplotypes
+        sequence_length=REGION_LENGTH,
+        recombination_rate=RECOMB_RATE,
+        population_size=NE,
+        random_seed=seed,
     )
+    ts = msprime.sim_mutations(ts, rate=MU, random_seed=seed + 1_000_000)
 
-    # Save tokenizer
-    with open(tokenizer_pkl, "wb") as f:
-        pickle.dump(enc, f)
+    if ts.num_mutations < N_SITES:
+        return None
 
-    t1 = time.time()
-    print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
+    G = ts.genotype_matrix()  # (n_variants, N_SAMPLES)
 
-    # --- Build token_bytes lookup for BPB evaluation ---
-    print("Tokenizer: building token_bytes lookup...")
-    special_set = set(SPECIAL_TOKENS)
-    token_bytes_list = []
-    for token_id in range(enc.n_vocab):
-        token_str = enc.decode([token_id])
-        if token_str in special_set:
-            token_bytes_list.append(0)
-        else:
-            token_bytes_list.append(len(token_str.encode("utf-8")))
-    token_bytes_tensor = torch.tensor(token_bytes_list, dtype=torch.int32)
-    torch.save(token_bytes_tensor, token_bytes_path)
-    print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
+    rng = random.Random(seed)
+    start = rng.randint(0, G.shape[0] - N_SITES)
+    window = G[start:start + N_SITES]  # (N_SITES, N_SAMPLES)
 
-    # Sanity check
-    test = "Hello world! Numbers: 123. Unicode: 你好"
-    encoded = enc.encode_ordinary(test)
-    decoded = enc.decode(encoded)
-    assert decoded == test, f"Tokenizer roundtrip failed: {test!r} -> {decoded!r}"
-    print(f"Tokenizer: sanity check passed (vocab_size={enc.n_vocab})")
+    return window.T.astype(np.int8)  # (N_SAMPLES, N_SITES)
+
+
+def generate_examples(n_examples, seed_offset=0, num_workers=8):
+    """Generate n_examples haplotype matrices using multiprocessing."""
+    # Generate extra seeds in case some simulations don't have enough sites
+    seeds = list(range(seed_offset + 1, seed_offset + n_examples * 3 + 1))
+
+    results = []
+    with Pool(processes=num_workers) as pool:
+        for result in pool.imap(simulate_one, seeds, chunksize=100):
+            if result is not None:
+                results.append(result)
+                if len(results) >= n_examples:
+                    break
+                if len(results) % 1000 == 0:
+                    print(f"  Generated {len(results)}/{n_examples}...")
+
+    if len(results) < n_examples:
+        raise RuntimeError(f"Only generated {len(results)}/{n_examples}. Increase REGION_LENGTH.")
+
+    return np.stack(results[:n_examples])
 
 # ---------------------------------------------------------------------------
 # Runtime utilities (imported by train.py)
 # ---------------------------------------------------------------------------
 
-class Tokenizer:
-    """Minimal tokenizer wrapper. Training is handled above."""
-
-    def __init__(self, enc):
-        self.enc = enc
-        self.bos_token_id = enc.encode_single_token(BOS_TOKEN)
-
-    @classmethod
-    def from_directory(cls, tokenizer_dir=TOKENIZER_DIR):
-        with open(os.path.join(tokenizer_dir, "tokenizer.pkl"), "rb") as f:
-            enc = pickle.load(f)
-        return cls(enc)
-
-    def get_vocab_size(self):
-        return self.enc.n_vocab
-
-    def get_bos_token_id(self):
-        return self.bos_token_id
-
-    def encode(self, text, prepend=None, num_threads=8):
-        if prepend is not None:
-            prepend_id = prepend if isinstance(prepend, int) else self.enc.encode_single_token(prepend)
-        if isinstance(text, str):
-            ids = self.enc.encode_ordinary(text)
-            if prepend is not None:
-                ids.insert(0, prepend_id)
-        elif isinstance(text, list):
-            ids = self.enc.encode_ordinary_batch(text, num_threads=num_threads)
-            if prepend is not None:
-                for row in ids:
-                    row.insert(0, prepend_id)
-        else:
-            raise ValueError(f"Invalid input type: {type(text)}")
-        return ids
-
-    def decode(self, ids):
-        return self.enc.decode(ids)
-
-
-def get_token_bytes(device="cpu"):
-    path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
-    with open(path, "rb") as f:
-        return torch.load(f, map_location=device)
-
-
-def _document_batches(split, tokenizer_batch_size=128):
-    """Infinite iterator over document batches from parquet files."""
-    parquet_paths = list_parquet_files()
-    assert len(parquet_paths) > 0, "No parquet files found. Run prepare.py first."
-    val_path = os.path.join(DATA_DIR, VAL_FILENAME)
-    if split == "train":
-        parquet_paths = [p for p in parquet_paths if p != val_path]
-    else:
-        parquet_paths = [val_path]
-    epoch = 1
-    while True:
-        for filepath in parquet_paths:
-            pf = pq.ParquetFile(filepath)
-            for rg_idx in range(pf.num_row_groups):
-                rg = pf.read_row_group(rg_idx)
-                batch = rg.column('text').to_pylist()
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i+tokenizer_batch_size], epoch
-        epoch += 1
-
-
-def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
+def make_dataloader(batch_size, split):
     """
-    BOS-aligned dataloader with best-fit packing.
-    Every row starts with BOS. Documents packed using best-fit to minimize cropping.
-    When no document fits remaining space, crops shortest doc to fill exactly.
-    100% utilization (no padding).
+    Yields (hap_matrix, epoch) where hap_matrix is (B, N_SAMPLES, N_SITES) float on GPU.
+    Infinite iterator, shuffles each epoch for training.
     """
     assert split in ["train", "val"]
-    row_capacity = T + 1
-    batches = _document_batches(split)
-    bos_token = tokenizer.get_bos_token_id()
-    doc_buffer = []
+    path = TRAIN_PATH if split == "train" else VAL_PATH
+    data = torch.load(path, map_location="cpu")  # (N, N_SAMPLES, N_SITES) int8
+    N = data.shape[0]
+
     epoch = 1
-
-    def refill_buffer():
-        nonlocal epoch
-        doc_batch, epoch = next(batches)
-        token_lists = tokenizer.encode(doc_batch, prepend=bos_token)
-        doc_buffer.extend(token_lists)
-
-    # Pre-allocate buffers: [inputs (B*T) | targets (B*T)]
-    row_buffer = torch.empty((B, row_capacity), dtype=torch.long)
-    cpu_buffer = torch.empty(2 * B * T, dtype=torch.long, pin_memory=True)
-    gpu_buffer = torch.empty(2 * B * T, dtype=torch.long, device="cuda")
-    cpu_inputs = cpu_buffer[:B * T].view(B, T)
-    cpu_targets = cpu_buffer[B * T:].view(B, T)
-    inputs = gpu_buffer[:B * T].view(B, T)
-    targets = gpu_buffer[B * T:].view(B, T)
-
     while True:
-        for row_idx in range(B):
-            pos = 0
-            while pos < row_capacity:
-                while len(doc_buffer) < buffer_size:
-                    refill_buffer()
-
-                remaining = row_capacity - pos
-
-                # Find largest doc that fits entirely
-                best_idx = -1
-                best_len = 0
-                for i, doc in enumerate(doc_buffer):
-                    doc_len = len(doc)
-                    if doc_len <= remaining and doc_len > best_len:
-                        best_idx = i
-                        best_len = doc_len
-
-                if best_idx >= 0:
-                    doc = doc_buffer.pop(best_idx)
-                    row_buffer[row_idx, pos:pos + len(doc)] = torch.tensor(doc, dtype=torch.long)
-                    pos += len(doc)
-                else:
-                    # No doc fits — crop shortest to fill remaining
-                    shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
-                    doc = doc_buffer.pop(shortest_idx)
-                    row_buffer[row_idx, pos:pos + remaining] = torch.tensor(doc[:remaining], dtype=torch.long)
-                    pos += remaining
-
-        cpu_inputs.copy_(row_buffer[:, :-1])
-        cpu_targets.copy_(row_buffer[:, 1:])
-        gpu_buffer.copy_(cpu_buffer, non_blocking=True)
-        yield inputs, targets, epoch
+        perm = torch.randperm(N) if split == "train" else torch.arange(N)
+        for i in range(0, N - batch_size + 1, batch_size):
+            idx = perm[i:i + batch_size]
+            batch = data[idx].float().cuda()
+            yield batch, epoch
+        epoch += 1
 
 # ---------------------------------------------------------------------------
 # Evaluation (DO NOT CHANGE — this is the fixed metric)
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate_bpb(model, tokenizer, batch_size):
+def evaluate_bpa(model, batch_size, mask_ratio=MASK_RATIO):
     """
-    Bits per byte (BPB): vocab size-independent evaluation metric.
-    Sums per-token cross-entropy (in nats), sums target byte lengths,
-    then converts nats/byte to bits/byte. Special tokens (byte length 0)
-    are excluded from both sums.
-    Uses fixed MAX_SEQ_LEN so results are comparable across configs.
+    Bits per allele (BPA): evaluate masked column prediction quality.
+    Applies deterministic masking, computes binary cross-entropy in bits
+    over all masked alleles on the validation set.
+
+    Lower is better. For random binary data with p=0.5, BPA = 1.0.
+    For real genetic data with LD, a good model should do well below 1.0.
     """
-    token_bytes = get_token_bytes(device="cuda")
-    val_loader = make_dataloader(tokenizer, batch_size, MAX_SEQ_LEN, "val")
-    steps = EVAL_TOKENS // (batch_size * MAX_SEQ_LEN)
+    val_loader = make_dataloader(batch_size, "val")
+    n_steps = EVAL_EXAMPLES // batch_size
+
     total_nats = 0.0
-    total_bytes = 0
-    for _ in range(steps):
-        x, y, _ = next(val_loader)
-        loss_flat = model(x, y, reduction='none').view(-1)
-        y_flat = y.view(-1)
-        nbytes = token_bytes[y_flat]
-        mask = nbytes > 0
-        total_nats += (loss_flat * mask).sum().item()
-        total_bytes += nbytes.sum().item()
-    return total_nats / (math.log(2) * total_bytes)
+    total_alleles = 0
+
+    for step_idx in range(n_steps):
+        hap_matrix, _ = next(val_loader)  # (B, N_SAMPLES, N_SITES)
+        B = hap_matrix.shape[0]
+
+        # Deterministic mask for reproducibility
+        g = torch.Generator(device=hap_matrix.device)
+        g.manual_seed(step_idx + 999999)
+        mask = torch.rand(B, N_SITES, device=hap_matrix.device, generator=g) < mask_ratio
+
+        # Model returns logits (B, N_SITES, N_SAMPLES)
+        logits = model(hap_matrix, mask)
+        targets = hap_matrix.transpose(1, 2)  # (B, N_SITES, N_SAMPLES)
+
+        # BCE on masked positions
+        all_bce = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+        mask_3d = mask.unsqueeze(-1).expand_as(all_bce)
+        total_nats += (all_bce * mask_3d).sum().item()
+        total_alleles += mask_3d.sum().item()
+
+    bpa = total_nats / (math.log(2) * total_alleles)
+    return bpa
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare data and tokenizer for autoresearch")
-    parser.add_argument("--num-shards", type=int, default=10, help="Number of training shards to download (-1 = all). Val shard is always pinned.")
-    parser.add_argument("--download-workers", type=int, default=8, help="Number of parallel download workers")
+    parser = argparse.ArgumentParser(description="Prepare data for population genetics autoresearch")
+    parser.add_argument("--n-train", type=int, default=20000, help="Number of training examples")
+    parser.add_argument("--n-val", type=int, default=EVAL_EXAMPLES, help="Number of validation examples")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers")
     args = parser.parse_args()
 
-    num_shards = MAX_SHARD if args.num_shards == -1 else args.num_shards
-
+    os.makedirs(CACHE_DIR, exist_ok=True)
     print(f"Cache directory: {CACHE_DIR}")
     print()
 
-    # Step 1: Download data
-    download_data(num_shards, download_workers=args.download_workers)
+    if os.path.exists(VAL_PATH):
+        print(f"Validation data already exists at {VAL_PATH}")
+    else:
+        print(f"Generating {args.n_val} validation examples...")
+        val_data = generate_examples(args.n_val, seed_offset=1_000_000, num_workers=args.workers)
+        torch.save(torch.from_numpy(val_data).to(torch.int8), VAL_PATH)
+        print(f"Saved to {VAL_PATH}")
     print()
 
-    # Step 2: Train tokenizer
-    train_tokenizer()
+    if os.path.exists(TRAIN_PATH):
+        print(f"Training data already exists at {TRAIN_PATH}")
+    else:
+        print(f"Generating {args.n_train} training examples...")
+        train_data = generate_examples(args.n_train, seed_offset=0, num_workers=args.workers)
+        torch.save(torch.from_numpy(train_data).to(torch.int8), TRAIN_PATH)
+        print(f"Saved to {TRAIN_PATH}")
     print()
+
     print("Done! Ready to train.")
