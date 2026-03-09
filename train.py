@@ -338,7 +338,7 @@ D_FF_MULT = 3
 
 # Optimization
 TOTAL_BATCH_SIZE = 256   # examples per optimizer step
-EMBEDDING_LR = 0.02     # learning rate for column embeddings (Adam)
+EMBEDDING_LR = 0.01     # learning rate for column embeddings (Adam)
 OUTPUT_LR = 0.004        # learning rate for output head (Adam)
 MATRIX_LR = 0.04         # learning rate for matrix parameters (Muon)
 SCALAR_LR = 0.5          # learning rate for per-layer scalars (Adam)
