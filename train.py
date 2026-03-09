@@ -334,7 +334,7 @@ class MuonAdamW(torch.optim.Optimizer):
 
 # Model architecture
 D_MODEL = 512
-N_HEADS = 8
+N_HEADS = 16
 D_FF_MULT = 4
 
 # Optimization
