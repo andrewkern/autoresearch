@@ -33,3 +33,4 @@ f8c06ab	0.684399	4.5	discard	remove pos_embed param entirely (changed init order
 d8137d5	0.684312	4.5	discard	train loss on all columns (dilutes useful gradient)
 d2e66e7	0.684300	4.5	discard	Muon weight decay=0 (regularization helps)
 42440be	0.684241	4.2	discard	parallel attention + MLP blocks (marginal)
+9e23250	0.684368	4.5	discard	Muon LR 0.06 (too high)
