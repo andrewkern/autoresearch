@@ -17,3 +17,4 @@ fc8d4fe	0.684284	4.0	keep	remove per-layer residual scaling (simpler + better)
 1700b86	0.684436	4.0	discard	GeLU activation (ReLU-squared better)
 e9a32c1	0.684993	4.0	discard	70% train mask ratio (too aggressive)
 2e4dd63	0.684240	4.5	keep	QK RMS normalization in attention
+6735740	0.684341	4.5	discard	dropout 0.1 in attention and MLP
