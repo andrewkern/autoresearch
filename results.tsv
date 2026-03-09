@@ -20,3 +20,4 @@ e9a32c1	0.684993	4.0	discard	70% train mask ratio (too aggressive)
 6735740	0.684341	4.5	discard	dropout 0.1 in attention and MLP
 8a29553	0.684213	4.5	keep	16 attention heads (head_dim=32)
 a7c284d	0.689270	4.6	discard	label smoothing 0.05 (trains wrong target distribution)
+52f22cf	0.684280	4.5	discard	cosine warmdown schedule (linear slightly better)
